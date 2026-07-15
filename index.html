@@ -97,7 +97,6 @@
     (function() {
         'use strict';
 
-        // ===== 工具 =====
         function log(msg) { console.log('[系统] ' + msg); }
 
         function formatCurrency(v) {
@@ -227,13 +226,217 @@
             });
         }
 
-        // ===== 页面渲染（与之前相同，略） =====
-        function renderMonthly() { /* 与之前完全一样，省略以节省篇幅，但实际代码中需要保留 */ }
-        function renderTrend() { /* 同上 */ }
-        function renderDataList() { /* 同上 */ }
-        function updateFileInfo() { /* 同上 */ }
+        // ===== 页面渲染 =====
+        function renderMonthly() {
+            var months = DataStore.getMonths();
+            var subEl = document.getElementById('monthlySub');
+            var sourceEl = document.getElementById('monthlySource');
+            if (months.length === 0) {
+                document.getElementById('monthlyKPI').innerHTML = '';
+                ['chartDonut', 'chartDept', 'chartJob'].forEach(function(id) {
+                    document.getElementById(id).innerHTML = '<div style="text-align:center;color:#9ca3af;padding:30px 0;">暂无数据</div>';
+                });
+                subEl.textContent = '请上传数据';
+                sourceEl.textContent = '—';
+                return;
+            }
+            var latest = months[months.length - 1];
+            var stats = Stats.getMonthStats(latest);
+            if (!stats) return;
+            subEl.textContent = formatMonthLabel(latest) + ' 详细分析';
+            sourceEl.textContent = formatMonthLabel(latest) + ' (' + stats.count + '人)';
 
-        // ===== 上传逻辑（改进版，包含列名映射和错误捕获） =====
+            document.getElementById('monthlyKPI').innerHTML = `
+                <div class="card"><div class="label">💰 总成本</div><div class="value">${formatCurrency(stats.totalCost)}</div></div>
+                <div class="card"><div class="label">👥 人数</div><div class="value">${stats.count}</div></div>
+                <div class="card"><div class="label">📊 人均成本</div><div class="value">${formatCurrency(stats.avgCost)}</div></div>
+                <div class="card"><div class="label">📈 最高薪资</div><div class="value">${formatCurrency(stats.maxSalary)}</div></div>
+            `;
+
+            var totalSalary = stats.totalSalary,
+                totalSocial = stats.totalSocial,
+                totalFund = stats.totalFund;
+            var donutData = [
+                { name: '应发工资', value: Math.round(totalSalary) },
+                { name: '公司社保', value: Math.round(totalSocial) },
+                { name: '公司公积金', value: Math.round(totalFund) }
+            ].filter(function(d) { return d.value > 0; });
+            if (donutData.length) {
+                var donutOpt = {
+                    tooltip: { trigger: 'item', formatter: '{b}: ¥{c} ({d}%)' },
+                    color: ['#3B82F6', '#10B981', '#06B6D4'],
+                    legend: { bottom: 5, itemWidth: 10, itemHeight: 10 },
+                    series: [{ type: 'pie', radius: ['45%', '70%'], data: donutData, label: { formatter: '{b}\n¥{c}',
+                            fontSize: 10 } }]
+                };
+                registerChart('chartDonut', donutOpt, 'donut');
+                var total = totalSalary + totalSocial + totalFund;
+                document.getElementById('insightDonut').textContent = '💡 总成本 ' + formatCurrency(total) +
+                    '，应发占比 ' + (totalSalary/total*100).toFixed(1) + '%';
+            }
+
+            var deptMap = groupBy(stats.employees, 'dept');
+            var deptData = Object.keys(deptMap).map(function(d) {
+                return { name: d, value: Math.round(sum(deptMap[d], 'totalCost')) };
+            }).sort(function(a, b) { return b.value - a.value; });
+            if (deptData.length) {
+                var deptOpt = {
+                    tooltip: { trigger: 'axis' },
+                    grid: { left: '10%', right: '6%', top: 16, bottom: 30 },
+                    xAxis: { type: 'category', data: deptData.map(function(d) { return d.name; }),
+                    axisLabel: { rotate: 20, fontSize: 9 } },
+                    yAxis: { type: 'value', name: '总成本 (¥)', axisLabel: { fontSize: 9,
+                            formatter: function(v) { return v >= 10000 ? (v/10000)+'万' : v; } } },
+                    series: [{ type: 'bar', data: deptData.map(function(d) { return d.value; }),
+                        itemStyle: { color: '#3B82F6', borderRadius: [4,4,0,0] }, barWidth: '40%' }]
+                };
+                registerChart('chartDept', deptOpt, 'dept');
+                var top = deptData[0];
+                document.getElementById('insightDept').textContent = '💡 部门 ' + top.name + ' 成本最高，为 ' +
+                    formatCurrency(top.value);
+            }
+
+            var jobMap = groupBy(stats.employees, 'postType');
+            var jobData = Object.keys(jobMap).map(function(j) {
+                return { name: j, value: Math.round(sum(jobMap[j], 'totalCost')) };
+            }).sort(function(a, b) { return b.value - a.value; });
+            if (jobData.length) {
+                var jobOpt = {
+                    tooltip: { trigger: 'axis' },
+                    grid: { left: '20%', right: '8%', top: 16, bottom: 20 },
+                    xAxis: { type: 'value', name: '总成本 (¥)', axisLabel: { fontSize: 9,
+                            formatter: function(v) { return v >= 10000 ? (v/10000)+'万' : v; } } },
+                    yAxis: { type: 'category', data: jobData.map(function(d) { return d.name; }),
+                    axisLabel: { fontSize: 9 } },
+                    series: [{ type: 'bar', data: jobData.map(function(d) { return d.value; }),
+                        itemStyle: { color: '#8B5CF6', borderRadius: [0,4,4,0] }, barWidth: '35%' }]
+                };
+                registerChart('chartJob', jobOpt, 'job');
+                var topJob = jobData[0];
+                document.getElementById('insightJob').textContent = '💡 岗位 ' + topJob.name + ' 成本最高，为 ' +
+                    formatCurrency(topJob.value);
+            }
+            renderDataList();
+        }
+
+        function renderTrend() {
+            var months = DataStore.getMonths();
+            var sourceEl = document.getElementById('trendSource');
+            if (months.length === 0) {
+                document.getElementById('trendKPI').innerHTML = '';
+                document.getElementById('chartTrend').innerHTML = '<div style="text-align:center;color:#9ca3af;padding:30px 0;">暂无数据</div>';
+                document.getElementById('insightTrend').textContent = '💡 请上传至少2个月的数据';
+                sourceEl.textContent = '—';
+                return;
+            }
+            var multi = Stats.getMultiStats(months);
+            if (!multi || Object.keys(multi.monthStats).length < 2) {
+                document.getElementById('trendKPI').innerHTML =
+                    '<div class="card"><div class="label">📊 月份数</div><div class="value">' + months.length +
+                    '</div><div class="sub">需要至少2个月有数据</div></div>';
+                document.getElementById('chartTrend').innerHTML = '<div style="text-align:center;color:#9ca3af;padding:30px 0;">至少需要2个月数据</div>';
+                document.getElementById('insightTrend').textContent = '💡 请上传更多月份数据';
+                sourceEl.textContent = months.map(function(m) { return formatMonthLabel(m); }).join('、');
+                return;
+            }
+            var totalCost = multi.totalCost,
+                avgCost = multi.avgCost,
+                count = multi.count;
+            document.getElementById('trendKPI').innerHTML = `
+                <div class="card"><div class="label">📊 总月份</div><div class="value">${Object.keys(multi.monthStats).length}</div></div>
+                <div class="card"><div class="label">💰 总成本（汇总）</div><div class="value">${formatCurrency(totalCost)}</div></div>
+                <div class="card"><div class="label">📈 人均成本（平均）</div><div class="value">${formatCurrency(avgCost)}</div></div>
+                <div class="card"><div class="label">👥 总人次</div><div class="value">${count}</div></div>
+            `;
+            var sorted = Object.keys(multi.monthStats).sort();
+            var trendData = sorted.map(function(m) {
+                return { name: formatMonthLabel(m), value: Math.round(multi.monthStats[m].totalCost) };
+            });
+            var trendOpt = {
+                tooltip: { trigger: 'axis' },
+                grid: { left: '8%', right: '6%', top: 16, bottom: 30 },
+                xAxis: { type: 'category', data: trendData.map(function(d) { return d.name; }),
+                axisLabel: { fontSize: 9 } },
+                yAxis: { type: 'value', name: '总成本 (¥)', axisLabel: { fontSize: 9,
+                        formatter: function(v) { return v >= 10000 ? (v/10000)+'万' : v; } } },
+                series: [{
+                    type: 'line',
+                    data: trendData.map(function(d) { return d.value; }),
+                    smooth: true,
+                    lineStyle: { width: 3, color: '#3B82F6' },
+                    areaStyle: {
+                        color: {
+                            type: 'linear',
+                            x: 0,
+                            y: 0,
+                            x2: 0,
+                            y2: 1,
+                            colorStops: [{ offset: 0, color: 'rgba(59,130,246,0.3)' },
+                            { offset: 1, color: 'rgba(59,130,246,0.02)' }]
+                        }
+                    },
+                    symbol: 'circle',
+                    symbolSize: 6
+                }]
+            };
+            registerChart('chartTrend', trendOpt, 'trend');
+            var firstVal = trendData[0].value,
+                lastVal = trendData[trendData.length - 1].value;
+            var changePct = firstVal > 0 ? ((lastVal - firstVal) / firstVal * 100) : 0;
+            var direction = changePct >= 0 ? '上升' : '下降';
+            document.getElementById('insightTrend').textContent = '💡 从 ' + trendData[0].name + ' 到 ' + trendData[
+                trendData.length - 1].name + '，总成本' + direction + ' ' + Math.abs(changePct).toFixed(1) + '%';
+            sourceEl.textContent = sorted.map(function(m) { return formatMonthLabel(m); }).join('、');
+        }
+
+        function renderDataList() {
+            var container = document.getElementById('dataList');
+            var months = DataStore.getMonths();
+            document.getElementById('monthCount').textContent = months.length ? '共 ' + months.length + ' 个月份' : '';
+            if (months.length === 0) {
+                container.innerHTML = '<div style="text-align:center;color:#9ca3af;padding:16px;">暂无数据</div>';
+                return;
+            }
+            var html = '';
+            months.forEach(function(m) {
+                var count = DataStore.getEmployees(m).length;
+                html += '<div class="data-item"><span class="info">' + formatMonthLabel(m) +
+                    '</span><span class="meta">' + count +
+                    ' 人</span><button class="btn btn-danger" style="padding:2px 12px;font-size:0.65rem;" data-month="' +
+                    m + '">删除</button></div>';
+            });
+            container.innerHTML = html;
+            container.querySelectorAll('[data-month]').forEach(function(btn) {
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    var month = this.dataset.month;
+                    if (confirm('确定要删除 ' + formatMonthLabel(month) + ' 的数据吗？')) {
+                        DataStore.deleteMonth(month);
+                        renderMonthly();
+                        renderTrend();
+                        updateFileInfo();
+                    }
+                });
+            });
+        }
+
+        function updateFileInfo() {
+            var months = DataStore.getMonths();
+            var info = document.getElementById('fileInfo');
+            if (months.length === 0) {
+                info.textContent = '未上传';
+                info.className = 'file-info';
+            } else {
+                var latest = months[months.length - 1];
+                var count = DataStore.getEmployees(latest).length;
+                info.textContent = '📊 ' + formatMonthLabel(latest) + ' (' + count + '人)';
+                info.className = 'file-info loaded';
+            }
+        }
+
+        // ================================================================
+        //  上传逻辑：支持你的中文表头
+        // ================================================================
         function setupUpload() {
             var uploadBtn = document.getElementById('uploadBtn');
             var fileInput = document.getElementById('fileInput');
@@ -252,97 +455,203 @@
                         var workbook = XLSX.read(data, { type: 'array' });
                         var firstSheet = workbook.Sheets[workbook.SheetNames[0]];
                         var json = XLSX.utils.sheet_to_json(firstSheet);
+
                         if (json.length === 0) { alert('文件为空'); return; }
 
-                        // ----- 列名映射（支持中文列名） -----
-                        var mapping = {
-                            'name': ['name', '姓名', '员工'],
-                            'dept': ['dept', '部门'],
-                            'post': ['post', '岗位'],
-                            'postType': ['postType', '岗位类型'],
-                            'grade': ['grade', '职级'],
-                            'grossPay': ['grossPay', '应发工资', '应发'],
-                            'fixedPay': ['fixedPay', '固定薪酬', '固定'],
-                            'floatPay': ['floatPay', '浮动薪酬', '浮动'],
-                            'socialCompany': ['socialCompany', '公司社保', '社保'],
-                            'fundCompany': ['fundCompany', '公司公积金', '公积金'],
-                            'tenureYears': ['tenureYears', '司龄']
-                        };
-
-                        // 获取第一行所有列名（小写）
+                        // 获取所有列名
                         var firstRow = json[0];
                         var colNames = Object.keys(firstRow);
-                        var lowerColMap = {};
-                        colNames.forEach(function(c) {
-                            lowerColMap[c.toLowerCase()] = c;
-                        });
+                        log('找到列: ' + colNames.join(', '));
 
-                        // 构建映射关系：目标字段 -> 实际列名
-                        var fieldMap = {};
-                        for (var target in mapping) {
-                            var candidates = mapping[target];
-                            for (var i = 0; i < candidates.length; i++) {
-                                var key = candidates[i].toLowerCase();
-                                if (lowerColMap[key]) {
-                                    fieldMap[target] = lowerColMap[key];
-                                    break;
-                                }
-                            }
-                        }
-                        // 如果某些字段没找到，给出警告
-                        var missing = [];
-                        for (var target in mapping) {
-                            if (!fieldMap[target]) missing.push(target);
-                        }
-                        if (missing.length) {
-                            log('未找到列: ' + missing.join(', '));
-                            // 仍继续尝试
-                        }
-
-                        // 标准化数据
+                        // 解析每行数据
                         var employees = json.map(function(row) {
-                            var emp = {};
-                            for (var target in fieldMap) {
-                                var raw = row[fieldMap[target]];
-                                if (target === 'grossPay' || target === 'fixedPay' || target === 'floatPay' ||
-                                    target === 'socialCompany' || target === 'fundCompany' || target ===
-                                    'tenureYears') {
-                                    emp[target] = parseFloat(raw) || 0;
-                                } else {
-                                    emp[target] = (raw || '').toString().trim();
+                            // 提取姓名
+                            var name = row['姓名'] || row['name'] || '';
+                            if (!name) {
+                                // 尝试找任何包含"姓名"的列
+                                for (var key in row) {
+                                    if (key.indexOf('姓名') >= 0 || key.indexOf('name') >= 0) {
+                                        name = row[key];
+                                        break;
+                                    }
                                 }
                             }
-                            // 如果某些字段缺失，补默认值
-                            if (!emp.grossPay) emp.grossPay = 0;
-                            if (!emp.fixedPay) emp.fixedPay = 0;
-                            if (!emp.floatPay) emp.floatPay = 0;
-                            if (!emp.socialCompany) emp.socialCompany = 0;
-                            if (!emp.fundCompany) emp.fundCompany = 0;
-                            if (!emp.tenureYears) emp.tenureYears = 0;
+
+                            // 提取部门
+                            var dept = row['部门'] || row['dept'] || '';
+                            if (!dept) {
+                                for (var key in row) {
+                                    if (key.indexOf('部门') >= 0 || key.indexOf('dept') >= 0) {
+                                        dept = row[key];
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // 提取岗位
+                            var post = row['岗位'] || row['post'] || '';
+
+                            // 提取岗位类型
+                            var postType = row['岗位类型'] || row['postType'] || '';
+
+                            // 提取职级
+                            var grade = row['职级'] || row['grade'] || '';
+
+                            // ----- 计算应发工资（grossPay）-----
+                            // 方式1：如果有"应发工资"列，直接使用
+                            var grossPay = parseFloat(row['应发工资'] || row['grossPay'] || 0);
+
+                            // 方式2：如果没有，尝试从"基本工资+绩效工资+各种补贴"计算
+                            if (!grossPay || grossPay === 0) {
+                                var baseSalary = parseFloat(row['基本工资'] || row['baseSalary'] || 0);
+                                var performance = parseFloat(row['绩效工资'] || row['performance'] || 0);
+                                // 补贴
+                                var fullAttendance = parseFloat(row['全勤补贴'] || 0);
+                                var overtime = parseFloat(row['加班补贴'] || row['加三补贴'] || 0);
+                                var travel = parseFloat(row['出差补贴'] || 0);
+                                var other = parseFloat(row['其他补贴'] || 0);
+                                // 小计（如果有的话）
+                                var subtotal = parseFloat(row['小计'] || row['应发合计'] || 0);
+
+                                // 尝试从"加项小计"获取
+                                if (!subtotal) {
+                                    // 查找"小计"相关列
+                                    for (var key in row) {
+                                        if (key.indexOf('小计') >= 0 || key.indexOf('应发') >= 0) {
+                                            subtotal = parseFloat(row[key]) || 0;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                grossPay = baseSalary + performance + fullAttendance + overtime + travel + other +
+                                    subtotal;
+                                // 如果算出来是0，尝试直接用"应发工资"列
+                                if (grossPay === 0) {
+                                    // 查找任何包含"应发"或"小计"的列
+                                    for (var key in row) {
+                                        if (key.indexOf('应发') >= 0 || key.indexOf('小计') >= 0) {
+                                            grossPay = parseFloat(row[key]) || 0;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ----- 固定薪酬（fixedPay）-----
+                            var fixedPay = parseFloat(row['固定薪酬'] || row['fixedPay'] || 0);
+                            if (!fixedPay || fixedPay === 0) {
+                                fixedPay = parseFloat(row['基本工资'] || 0);
+                            }
+
+                            // ----- 浮动薪酬（floatPay）-----
+                            var floatPay = parseFloat(row['浮动薪酬'] || row['floatPay'] || 0);
+                            if (!floatPay || floatPay === 0) {
+                                floatPay = parseFloat(row['绩效工资'] || 0);
+                            }
+
+                            // ----- 公司社保（socialCompany）-----
+                            var socialCompany = parseFloat(row['社保(公司部分)'] || row['社保（公司部分）'] || row[
+                                '社保(公司部2)'] || row['socialCompany'] || 0);
+                            if (!socialCompany || socialCompany === 0) {
+                                // 尝试找社保相关列
+                                for (var key in row) {
+                                    if (key.indexOf('社保') >= 0 && (key.indexOf('公司') >= 0 || key.indexOf(
+                                        '单位') >= 0)) {
+                                        socialCompany = parseFloat(row[key]) || 0;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // ----- 公司公积金（fundCompany）-----
+                            var fundCompany = parseFloat(row['公积金(公司部分)'] || row['公积金（公司部分）'] || row[
+                                '公积金(公司部2)'] || row['fundCompany'] || 0);
+                            if (!fundCompany || fundCompany === 0) {
+                                for (var key in row) {
+                                    if (key.indexOf('公积金') >= 0 && (key.indexOf('公司') >= 0 || key.indexOf(
+                                        '单位') >= 0)) {
+                                        fundCompany = parseFloat(row[key]) || 0;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // ----- 司龄（tenureYears）-----
+                            var tenureYears = parseFloat(row['司龄'] || row['tenureYears'] || 0);
+                            if (!tenureYears || tenureYears === 0) {
+                                for (var key in row) {
+                                    if (key.indexOf('司龄') >= 0 || key.indexOf('入职年限') >= 0) {
+                                        tenureYears = parseFloat(row[key]) || 0;
+                                        break;
+                                    }
+                                }
+                            }
+
                             // 计算总成本
-                            emp.totalCost = emp.grossPay + emp.socialCompany + emp.fundCompany;
-                            return emp;
+                            var totalCost = grossPay + socialCompany + fundCompany;
+
+                            // 如果总成本还是0，尝试从"总成本"列读取
+                            if (totalCost === 0) {
+                                totalCost = parseFloat(row['总成本'] || row['totalCost'] || 0);
+                            }
+
+                            return {
+                                name: name || '未知',
+                                dept: dept || '未知部门',
+                                post: post || '',
+                                postType: postType || '',
+                                grade: grade || '',
+                                grossPay: grossPay,
+                                fixedPay: fixedPay,
+                                floatPay: floatPay,
+                                socialCompany: socialCompany,
+                                fundCompany: fundCompany,
+                                tenureYears: tenureYears,
+                                totalCost: totalCost
+                            };
                         });
+
+                        // 过滤掉无效数据（没有姓名和成本都为0的）
+                        var validEmployees = employees.filter(function(e) {
+                            return e.name && e.name !== '未知' && e.totalCost > 0;
+                        });
+
+                        if (validEmployees.length === 0) {
+                            alert('未能解析到有效数据，请检查表头格式是否正确。');
+                            log('解析到 ' + employees.length + ' 条记录，但都无效');
+                            return;
+                        }
 
                         // 识别月份
                         var monthKey = '';
-                        if (json[0].month) monthKey = json[0].month;
-                        else if (json[0].日期) monthKey = json[0].日期;
-                        else {
-                            var name = files[0].name;
-                            var match = name.match(/(\d{4}-\d{2})/);
+                        if (json[0]['月份'] || json[0]['month']) {
+                            monthKey = json[0]['月份'] || json[0]['month'];
+                        } else {
+                            var fileName = files[0].name;
+                            var match = fileName.match(/(\d{4}-\d{2})/);
                             if (match) monthKey = match[1];
                             else monthKey = new Date().toISOString().slice(0, 7);
                         }
 
-                        DataStore.setEmployees(monthKey, employees);
-                        alert('上传成功！' + formatMonthLabel(monthKey) + ' 共 ' + employees.length + ' 人');
-                        // 刷新页面
+                        // 检查是否已有该月份数据
+                        var existing = DataStore.getEmployees(monthKey);
+                        if (existing && existing.length > 0) {
+                            if (!confirm('月份 ' + formatMonthLabel(monthKey) + ' 已有数据，是否覆盖？')) {
+                                return;
+                            }
+                        }
+
+                        DataStore.setEmployees(monthKey, validEmployees);
+                        alert('✅ 上传成功！' + formatMonthLabel(monthKey) + ' 共 ' + validEmployees.length + ' 人');
+                        log('上传成功: ' + monthKey + ', ' + validEmployees.length + '人');
+
                         renderMonthly();
                         renderTrend();
                         updateFileInfo();
+
                     } catch (err) {
-                        alert('解析失败：' + err.message);
+                        alert('❌ 解析失败：' + err.message);
                         log('上传错误: ' + err.stack);
                     }
                 };
@@ -350,14 +659,18 @@
                 this.value = '';
             });
 
-            // 下载模板（列名完整正确）
+            // 下载模板（中文表头，符合你的格式）
             templateBtn.addEventListener('click', function() {
                 var template = [
-                    ['name', 'dept', 'post', 'postType', 'grade', 'grossPay', 'fixedPay', 'floatPay',
-                        'socialCompany', 'fundCompany', 'tenureYears'
+                    ['姓名', '部门', '岗位', '岗位类型', '职级', '基本工资', '绩效工资', '全勤补贴', '加班补贴', '出差补贴',
+                        '其他补贴', '应发合计', '社保(公司部分)', '公积金(公司部分)', '司龄'
                     ],
-                    ['张三', '技术部', '工程师', '技术', 'P6', 25000, 20000, 5000, 5000, 2500, 3.5],
-                    ['李四', '市场部', '经理', '管理', 'M3', 30000, 24000, 6000, 6000, 3000, 5.0]
+                    ['张三', '技术部', '工程师', '技术', 'P6', 20000, 5000, 500, 0, 0, 0, 25500, 5000, 2500,
+                        3.5
+                    ],
+                    ['李四', '市场部', '经理', '管理', 'M3', 24000, 6000, 500, 0, 0, 0, 30500, 6000, 3000,
+                        5.0
+                    ]
                 ];
                 var wb = XLSX.utils.book_new();
                 var ws = XLSX.utils.aoa_to_sheet(template);
@@ -365,7 +678,7 @@
                 var wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
                 var blob = new Blob([wbout], { type: 'application/octet-stream' });
                 var link = document.createElement('a');
-                link.download = '工资表模板.xlsx';
+                link.download = '工资表模板_中文.xlsx';
                 link.href = URL.createObjectURL(blob);
                 document.body.appendChild(link);
                 link.click();
@@ -401,7 +714,8 @@
             renderTrend();
             updateFileInfo();
             setTimeout(resizeCharts, 300);
-            log('启动完成');
+            log('🚀 系统启动完成！');
+            log('📌 支持中文表头：姓名、部门、基本工资、绩效工资、社保(公司部分)、公积金(公司部分)等');
         }
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', init);
